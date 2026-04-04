@@ -116,17 +116,21 @@ function truncateBuild(text, head, tail) {
     const cleanLines = clean(text).split("\n");
     const headLines = [];
     const tailLines = [];
+    const seenHead = new Set();
     const seenTail = new Set();
+    // Head: collect first 3 important lines
     for (const line of cleanLines) {
         if (!isProgress(line) && (isImportant(line) || headLines.length < 3)) {
-            headLines.push(line.trim());
+            const trimmed = line.trim();
+            headLines.push(trimmed);
+            seenHead.add(trimmed);
         }
     }
-    // Tail: only important lines NOT already in head, deduped
+    // Tail: only important lines NOT in head AND deduped
     for (const line of cleanLines) {
         if (isImportant(line)) {
             const trimmed = line.trim();
-            if (!seenTail.has(trimmed)) {
+            if (!seenHead.has(trimmed) && !seenTail.has(trimmed)) {
                 seenTail.add(trimmed);
                 tailLines.push(trimmed);
             }
