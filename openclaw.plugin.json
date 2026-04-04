@@ -1,0 +1,59 @@
+{
+  "id": "exec-truncate",
+  "name": "Exec Truncate",
+  "description": "Domain-aware output truncation for exec tool calls. Compresses git diff/log, grep, ls, and build output, reducing token consumption by 20-40% on common dev commands.",
+  "version": "1.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable/disable output truncation globally"
+      },
+      "gitDiff": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "headLines": { "type": "integer", "default": 100 },
+          "tailLines": { "type": "integer", "default": 20 }
+        }
+      },
+      "gitLog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "maxLines": { "type": "integer", "default": 50 }
+        }
+      },
+      "grep": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "maxMatches": { "type": "integer", "default": 50 }
+        }
+      },
+      "ls": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "maxEntries": { "type": "integer", "default": 100 }
+        }
+      },
+      "build": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true },
+          "headLines": { "type": "integer", "default": 10 },
+          "tailLines": { "type": "integer", "default": 40 }
+        }
+      }
+    }
+  }
+}
