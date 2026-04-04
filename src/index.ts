@@ -52,12 +52,13 @@ const MARKER = (n: number) =>
 // Domain-specific truncation
 // ---------------------------------------------------------------------------
 
-/** git diff: additions-only head + last N additions, skip unchanged lines */
+/** git diff: head + tail additions, preserve original when everything fits */
 function truncateGitDiff(text: string, head: number, tail: number): string {
   const lines = text.split("\n");
   const additions = lines.filter((l) => l.startsWith("+"));
   if (additions.length === 0) return text;
-  if (additions.length <= head + tail) return additions.join("\n");
+  // If additions fit entirely within head+tail, return original (preserves context)
+  if (additions.length <= head + tail) return text;
   const kept = additions.slice(0, head);
   const omitted = additions.length - head - tail;
   const tailAdditions = additions.slice(-tail);
@@ -67,28 +68,26 @@ function truncateGitDiff(text: string, head: number, tail: number): string {
 /** git log: one line per commit — hash | subject */
 function truncateGitLog(text: string, max: number): string {
   const lines = text.split("\n");
-  const output: string[] = [];
-  let commitLines: string[] = [];
 
-  const flush = () => {
-    if (commitLines.length === 0) return;
-    const summary = commitLines.find((l) => l.trim().length > 0) ?? "";
-    const hashMatch = summary.match(/^([0-9a-f]{7,40})(\s+)(.*)/);
-    if (!hashMatch) { commitLines = []; return; }
-    output.push(`${hashMatch[1].slice(0, 7)} | ${hashMatch[3].trim()}`);
-    commitLines = [];
-  };
-
+  // Single-pass: collect commit header lines
+  const commitLines: string[] = [];
   for (const line of lines) {
-    if (/^[0-9a-f]{7,40} /.test(line)) flush();
-    if (output.length >= max) break;
-    commitLines.push(line);
+    if (/^[0-9a-f]{7,40} /.test(line)) commitLines.push(line);
   }
-  flush();
 
-  const totalCommits = lines.filter((l) => /^[0-9a-f]{7,40} /.test(l)).length;
-  const omitted = totalCommits - output.length;
-  if (omitted > 0) output.push(MARKER(omitted));
+  if (commitLines.length === 0) return text;
+  if (commitLines.length <= max) return text;
+
+  const kept = commitLines.slice(0, max);
+  const output = kept.map((line) => {
+    const hashMatch = line.match(/^([0-9a-f]{7,40})(\s+)(.*)/);
+    return hashMatch
+      ? `${hashMatch[1].slice(0, 7)} | ${hashMatch[3].trim()}`
+      : line;
+  });
+
+  const omitted = commitLines.length - max;
+  output.push(MARKER(omitted));
 
   return output.join("\n");
 }
@@ -162,12 +161,23 @@ function truncateBuild(text: string, head: number, tail: number): string {
   const cleanLines = clean(text).split("\n");
   const headLines: string[] = [];
   const tailLines: string[] = [];
+  const seenTail = new Set<string>();
 
   for (const line of cleanLines) {
     if (!isProgress(line) && (isImportant(line) || headLines.length < 3)) {
       headLines.push(line.trim());
     }
-    if (isImportant(line)) tailLines.push(line.trim());
+  }
+
+  // Tail: only important lines NOT already in head, deduped
+  for (const line of cleanLines) {
+    if (isImportant(line)) {
+      const trimmed = line.trim();
+      if (!seenTail.has(trimmed)) {
+        seenTail.add(trimmed);
+        tailLines.push(trimmed);
+      }
+    }
   }
 
   const kept = headLines.slice(0, head);
