@@ -161,7 +161,6 @@ function truncateBuild(text: string, head: number, tail: number): string {
   const cleanLines = clean(text).split("\n");
   const headLines: string[] = [];
   const tailLines: string[] = [];
-  const seenTail = new Set<string>();
 
   for (const line of cleanLines) {
     if (!isProgress(line) && (isImportant(line) || headLines.length < 3)) {
@@ -169,8 +168,11 @@ function truncateBuild(text: string, head: number, tail: number): string {
     }
   }
 
-  // Tail: only important lines NOT already in head, deduped
-  for (const line of cleanLines) {
+  // Tail: only important lines from AFTER head cutoff, deduped
+  const headCutoff = headLines.length;
+  const seenTail = new Set<string>();
+
+  for (const line of cleanLines.slice(headCutoff)) {
     if (isImportant(line)) {
       const trimmed = line.trim();
       if (!seenTail.has(trimmed)) {
