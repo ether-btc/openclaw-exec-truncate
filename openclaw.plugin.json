@@ -2,7 +2,7 @@
   "id": "exec-truncate",
   "name": "Exec Truncate",
   "description": "Domain-aware output truncation for exec tool calls. Compresses git diff/log, grep, ls, and build output, reducing token consumption by 20-40% on common dev commands.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
