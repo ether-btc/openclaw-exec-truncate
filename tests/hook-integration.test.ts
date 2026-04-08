@@ -9,7 +9,7 @@ function simulateHook(
   messageContent: string | Array<{ type: string; text?: string }>,
   config: { enabled?: boolean; gitDiff?: { headLines?: number; tailLines?: number } },
 ): string | Array<{ type: string; text?: string }> {
-  const MARKER = (n: number) => `  ... [${n} lines truncated by exec-truncate] ...`;
+  const MARKER = (n: number) => `  ... [${n} ${n === 1 ? "line" : "lines"} truncated by exec-truncate] ...`;
 
   const content =
     typeof messageContent === "string"

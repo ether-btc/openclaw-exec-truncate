@@ -4,10 +4,8 @@
  * Hook: tool_result_persist
  * Compresses git diff/log, grep, ls, and build output — 20-40% token savings.
  */
+// @ts-ignore — openclaw plugin SDK does not export definePluginEntry in its type stubs
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-// isSynthetic not currently used but kept for future plugin macro expansion
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { isSynthetic } from "openclaw/plugin-sdk/util";
 
 // ---------------------------------------------------------------------------
 // Config types (mirrors openclaw.plugin.json configSchema)
@@ -49,7 +47,7 @@ interface PluginConfig {
 // ---------------------------------------------------------------------------
 
 const MARKER = (n: number) =>
-  `  ... [${n} lines truncated by exec-truncate] ...`;
+  `  ... [${n} ${n === 1 ? "line" : "lines"} truncated by exec-truncate] ...`;
 
 // ---------------------------------------------------------------------------
 // Domain-specific truncation
@@ -71,39 +69,36 @@ function truncateGitDiff(text: string, head: number, tail: number): string {
 /** git log: one line per commit — hash | subject */
 function truncateGitLog(text: string, max: number): string {
   const lines = text.split("\n");
-  const commitSubjects: string[] = [];
+  const output: string[] = [];
+  let commitLines: string[] = [];
 
-  // Split into commits on hash-line boundary, extract subject from each
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    // A commit starts at a line beginning with a git hash (40 standard, up to 40 abbreviated)
-    if (/^[0-9a-f]{7,40} [^0-9a-f]/.test(line)) {
-      // First non-blank line after the hash line is the subject
-      let j = i + 1;
-      while (j < lines.length && /^[0-9a-f]{7,40} [^0-9a-f]/.test(lines[j])) break;
-      let subject = "";
-      while (j < lines.length) {
-        const next = lines[j].trim();
-        if (/^[0-9a-f]{7,40} [^0-9a-f]/.test(lines[j])) break; // next commit
-        if (next) { subject = next; break; }
-        j++;
-      }
-      const hashMatch = line.match(/^([0-9a-f]{7,40})/);
-      const hash7 = hashMatch ? hashMatch[1].slice(0, 7) : line.slice(0, 7);
-      const subjectText = subject || line.slice(40).trim();
-      commitSubjects.push(`${hash7} | ${subjectText}`);
-      i = j;
-    } else {
-      i++;
+  const flush = () => {
+    if (commitLines.length === 0) return;
+    // Subject = first non-empty line within the commit block
+    const subject =
+      commitLines.find((l) => l.trim().length > 0) ?? "";
+    const hashMatch = subject.match(/^([0-9a-f]{7,40})(?:\s+)(.*)/);
+    if (!hashMatch) {
+      commitLines = [];
+      return;
     }
+    const hash7 = hashMatch[1].slice(0, 7);
+    const msg = hashMatch[2].trim();
+    output.push(`${hash7} | ${msg}`);
+    commitLines = [];
+  };
+
+  for (const line of lines) {
+    if (/^[0-9a-f]{7,40} /.test(line)) flush();
+    commitLines.push(line);
   }
+  flush();
 
-  if (commitSubjects.length === 0) return text;
-  if (commitSubjects.length <= max) return commitSubjects.join("\n");
+  if (output.length === 0) return text;
+  if (output.length <= max) return output.join("\n");
 
-  const kept = commitSubjects.slice(0, max);
-  const omitted = commitSubjects.length - max;
+  const kept = output.slice(0, max);
+  const omitted = output.length - max;
   return [...kept, MARKER(omitted)].join("\n");
 }
 
@@ -113,17 +108,18 @@ function truncateGrep(text: string, max: number): string {
   const output: string[] = [];
   const seen = new Set<string>();
 
+  let total = 0;
   for (const line of lines) {
-    if (output.length >= max) break;
     if (!line.trim()) continue;
+    total++;
+    if (output.length >= max) continue;
     const stripped = line.replace(/^\/.+?\/([^/]+:\d+)/, "$1");
     if (seen.has(stripped)) continue; // deduplicate
     seen.add(stripped);
     output.push(stripped);
   }
 
-  const totalUnique = seen.size;
-  const omitted = totalUnique - output.length;
+  const omitted = total - output.length;
   if (omitted > 0) output.push(MARKER(omitted));
 
   return output.join("\n");
@@ -180,16 +176,16 @@ function truncateBuild(text: string, head: number, tail: number): string {
   const seenHead = new Set<string>();
   const seenTail = new Set<string>();
 
-  // Head: collect first 3 important lines
+  // Head: only non-progress, non-important filler lines, up to head slots
   for (const line of cleanLines) {
-    if (!isProgress(line) && (isImportant(line) || headLines.length < 3)) {
+    if (!isProgress(line) && !isImportant(line) && headLines.length < head) {
       const trimmed = line.trim();
       headLines.push(trimmed);
       seenHead.add(trimmed);
     }
   }
 
-  // Tail: only important lines NOT in head AND deduped
+  // Tail: important lines only, deduped against head
   for (const line of cleanLines) {
     if (isImportant(line)) {
       const trimmed = line.trim();
@@ -257,7 +253,7 @@ function detectDomain(text: string): string | null {
     return "gitDiff";
   if (/^[0-9a-f]{7,40} /.test(text) && /Author:|commit /m.test(text))
     return "gitLog";
-  if (/^[^:\n]+:\d+:\d*:/m.test(text)) return "grep";
+  if (/^[^:\n]+:\d+:/m.test(text)) return "grep";
   if (/^[dl\-bcs][rwx\-]{9}\s+\d+\s+\S+/m.test(text)) return "ls";
   if (/\b(error|Error|ERROR|warning|Warning|WARN|failed|FAILED|compil)/m.test(text))
     return "build";
@@ -268,28 +264,37 @@ function detectDomain(text: string): string | null {
 // Plugin entry
 // ---------------------------------------------------------------------------
 
-export { truncateGitDiff, truncateGitLog, truncateGrep, truncateLs, truncateBuild, detectDomain, applyTruncation, MARKER };
+export {
+  truncateGitDiff,
+  truncateGitLog,
+  truncateGrep,
+  truncateLs,
+  truncateBuild,
+  detectDomain,
+  applyTruncation,
+  MARKER,
+};
 export default definePluginEntry({
   id: "exec-truncate",
   name: "exec-truncate",
   description: "Domain-aware output truncation for exec tool",
-  register: (api) => {
-    const raw = api.pluginConfig as Record<string, unknown> | undefined;
+  register: (api: any) => {
+    const raw = api.pluginConfig as Record<string, unknown> ;
     const config: PluginConfig = {
-      enabled: (raw?.enabled as boolean | undefined),
-      gitDiff: raw?.gitDiff as GitDiffConfig | undefined,
-      gitLog: raw?.gitLog as GitLogConfig | undefined,
-      grep: raw?.grep as GrepConfig | undefined,
-      ls: raw?.ls as LsConfig | undefined,
-      build: raw?.build as BuildConfig | undefined,
+      enabled: raw?.enabled as boolean ,
+      gitDiff: raw?.gitDiff as GitDiffConfig ,
+      gitLog: raw?.gitLog as GitLogConfig ,
+      grep: raw?.grep as GrepConfig ,
+      ls: raw?.ls as LsConfig ,
+      build: raw?.build as BuildConfig ,
     };
 
-    // @ts-ignore — registerHook not in core.d.ts stubs
+    // TODO: upstream openclaw plugin SDK types — registerHook not in core.d.ts stubs
+    // @ts-ignore
     api.registerHook("tool_result_persist", (event: {
       toolName: string;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       message: any;
-      // isSynthetic: kept for future use — truncation applies to all exec output
     }) => {
       const { toolName, message } = event;
 
