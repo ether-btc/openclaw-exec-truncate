@@ -1,0 +1,335 @@
+/**
+ * openclaw-exec-truncate — Domain-aware output truncation for exec tool
+ *
+ * Hook: tool_result_persist
+ * Compresses git diff/log, grep, ls, and build output — 20-40% token savings.
+ */
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+// isSynthetic not currently used but kept for future plugin macro expansion
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import { isSynthetic } from "openclaw/plugin-sdk/util";
+
+// ---------------------------------------------------------------------------
+// Config types (mirrors openclaw.plugin.json configSchema)
+// ---------------------------------------------------------------------------
+
+interface GitDiffConfig {
+  enabled?: boolean;
+  headLines?: number;
+  tailLines?: number;
+}
+interface GitLogConfig {
+  enabled?: boolean;
+  maxLines?: number;
+}
+interface GrepConfig {
+  enabled?: boolean;
+  maxMatches?: number;
+}
+interface LsConfig {
+  enabled?: boolean;
+  maxEntries?: number;
+}
+interface BuildConfig {
+  enabled?: boolean;
+  headLines?: number;
+  tailLines?: number;
+}
+interface PluginConfig {
+  enabled?: boolean;
+  gitDiff?: GitDiffConfig;
+  gitLog?: GitLogConfig;
+  grep?: GrepConfig;
+  ls?: LsConfig;
+  build?: BuildConfig;
+}
+
+// ---------------------------------------------------------------------------
+// Truncation helpers
+// ---------------------------------------------------------------------------
+
+const MARKER = (n: number) =>
+  `  ... [${n} lines truncated by exec-truncate] ...`;
+
+// ---------------------------------------------------------------------------
+// Domain-specific truncation
+// ---------------------------------------------------------------------------
+
+/** git diff: head + tail additions, preserve original when everything fits */
+function truncateGitDiff(text: string, head: number, tail: number): string {
+  const lines = text.split("\n");
+  const additions = lines.filter((l) => l.startsWith("+"));
+  if (additions.length === 0) return text;
+  // If additions fit entirely within head+tail, return original (preserves context)
+  if (additions.length <= head + tail) return text;
+  const kept = additions.slice(0, head);
+  const omitted = additions.length - head - tail;
+  const tailAdditions = additions.slice(-tail);
+  return [...kept, MARKER(omitted), ...tailAdditions].join("\n");
+}
+
+/** git log: one line per commit — hash | subject */
+function truncateGitLog(text: string, max: number): string {
+  const lines = text.split("\n");
+  const commitSubjects: string[] = [];
+
+  // Split into commits on hash-line boundary, extract subject from each
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    // A commit starts at a line beginning with a git hash (40 standard, up to 40 abbreviated)
+    if (/^[0-9a-f]{7,40} [^0-9a-f]/.test(line)) {
+      // First non-blank line after the hash line is the subject
+      let j = i + 1;
+      while (j < lines.length && /^[0-9a-f]{7,40} [^0-9a-f]/.test(lines[j])) break;
+      let subject = "";
+      while (j < lines.length) {
+        const next = lines[j].trim();
+        if (/^[0-9a-f]{7,40} [^0-9a-f]/.test(lines[j])) break; // next commit
+        if (next) { subject = next; break; }
+        j++;
+      }
+      const hashMatch = line.match(/^([0-9a-f]{7,40})/);
+      const hash7 = hashMatch ? hashMatch[1].slice(0, 7) : line.slice(0, 7);
+      const subjectText = subject || line.slice(40).trim();
+      commitSubjects.push(`${hash7} | ${subjectText}`);
+      i = j;
+    } else {
+      i++;
+    }
+  }
+
+  if (commitSubjects.length === 0) return text;
+  if (commitSubjects.length <= max) return commitSubjects.join("\n");
+
+  const kept = commitSubjects.slice(0, max);
+  const omitted = commitSubjects.length - max;
+  return [...kept, MARKER(omitted)].join("\n");
+}
+
+/** grep: strip absolute paths, keep filename:line:col */
+function truncateGrep(text: string, max: number): string {
+  const lines = text.split("\n");
+  const output: string[] = [];
+  const seen = new Set<string>();
+
+  for (const line of lines) {
+    if (output.length >= max) break;
+    if (!line.trim()) continue;
+    const stripped = line.replace(/^\/.+?\/([^/]+:\d+)/, "$1");
+    if (seen.has(stripped)) continue; // deduplicate
+    seen.add(stripped);
+    output.push(stripped);
+  }
+
+  const totalUnique = seen.size;
+  const omitted = totalUnique - output.length;
+  if (omitted > 0) output.push(MARKER(omitted));
+
+  return output.join("\n");
+}
+
+/** ls: strip perms/owner/group/time, abbreviate size */
+function truncateLs(text: string, max: number): string {
+  const lines = text.split("\n");
+  const output: string[] = [];
+
+  for (const line of lines) {
+    if (!line.trim() || line.includes("total ")) continue;
+    if (output.length < max) {
+      const match = line.match(
+        /^([dl\-bcs])[rwx\-]{9}[\t ]+\d+[\t ]+\S+[\t ]+\S+[\t ]+(\d+)[\t ]+\w+[\t ]+\d+[\t:]+[\t ]+(.+)$/,
+      );
+      if (match) {
+        const [, type, size, name] = match;
+        const icon = type === "d" ? "📁" : "📄";
+        const abbrev = abbrevSize(parseInt(size, 10) || 0);
+        output.push(`${icon}  ${abbrev}  ${name}`);
+      } else {
+        output.push(line);
+      }
+    }
+  }
+
+  const total = lines.filter((l) => l.trim() && !l.includes("total ")).length;
+  if (output.length < total) output.push(MARKER(total - output.length));
+
+  return output.join("\n");
+}
+
+function abbrevSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}M`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)}G`;
+}
+
+/** build output: strip ANSI, progress bars, keep errors/warnings */
+function truncateBuild(text: string, head: number, tail: number): string {
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  const clean = (s: string) => stripAnsi(s.replace(/\r.+$/gm, ""));
+  const isProgress = (s: string) =>
+    /^[\s]*[═▓░█●○■□◉◌]+\s*\d+%/m.test(s) || /^[\s]*\r$/.test(s);
+  const isImportant = (s: string) =>
+    /\b(error|Error|ERROR|fail|Fail|FAIL|warning|Warning|WARN|warn)\b/i.test(s) ||
+    /^(\.\/|\/|[a-z]:)/i.test(s.split(":")[0] ?? "");
+
+  const cleanLines = clean(text).split("\n");
+  const headLines: string[] = [];
+  const tailLines: string[] = [];
+  const seenHead = new Set<string>();
+  const seenTail = new Set<string>();
+
+  // Head: collect first 3 important lines
+  for (const line of cleanLines) {
+    if (!isProgress(line) && (isImportant(line) || headLines.length < 3)) {
+      const trimmed = line.trim();
+      headLines.push(trimmed);
+      seenHead.add(trimmed);
+    }
+  }
+
+  // Tail: only important lines NOT in head AND deduped
+  for (const line of cleanLines) {
+    if (isImportant(line)) {
+      const trimmed = line.trim();
+      if (!seenHead.has(trimmed) && !seenTail.has(trimmed)) {
+        seenTail.add(trimmed);
+        tailLines.push(trimmed);
+      }
+    }
+  }
+
+  const kept = headLines.slice(0, head);
+  const tailChunk = tailLines.slice(-tail);
+  return [...kept, "", ...tailChunk].join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Apply truncation based on detected domain
+// ---------------------------------------------------------------------------
+
+function applyTruncation(
+  output: string,
+  domain: string,
+  config: PluginConfig,
+): string {
+  switch (domain) {
+    case "gitDiff": {
+      if (config.gitDiff?.enabled === false) return output;
+      return truncateGitDiff(
+        output,
+        config.gitDiff?.headLines ?? 80,
+        config.gitDiff?.tailLines ?? 20,
+      );
+    }
+    case "gitLog": {
+      if (config.gitLog?.enabled === false) return output;
+      return truncateGitLog(output, config.gitLog?.maxLines ?? 50);
+    }
+    case "grep": {
+      if (config.grep?.enabled === false) return output;
+      return truncateGrep(output, config.grep?.maxMatches ?? 50);
+    }
+    case "ls": {
+      if (config.ls?.enabled === false) return output;
+      return truncateLs(output, config.ls?.maxEntries ?? 100);
+    }
+    case "build": {
+      if (config.build?.enabled === false) return output;
+      return truncateBuild(
+        output,
+        config.build?.headLines ?? 10,
+        config.build?.tailLines ?? 30,
+      );
+    }
+    default:
+      return output;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Domain detection (output-pattern based — command-based via Chunk 2)
+// ---------------------------------------------------------------------------
+
+function detectDomain(text: string): string | null {
+  if (/^diff --git/m.test(text) || /^index [0-9a-f]{7}/m.test(text))
+    return "gitDiff";
+  if (/^[0-9a-f]{7,40} /.test(text) && /Author:|commit /m.test(text))
+    return "gitLog";
+  if (/^[^:\n]+:\d+:\d*:/m.test(text)) return "grep";
+  if (/^[dl\-bcs][rwx\-]{9}\s+\d+\s+\S+/m.test(text)) return "ls";
+  if (/\b(error|Error|ERROR|warning|Warning|WARN|failed|FAILED|compil)/m.test(text))
+    return "build";
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Plugin entry
+// ---------------------------------------------------------------------------
+
+export { truncateGitDiff, truncateGitLog, truncateGrep, truncateLs, truncateBuild, detectDomain, applyTruncation, MARKER };
+export default definePluginEntry({
+  id: "exec-truncate",
+  name: "exec-truncate",
+  description: "Domain-aware output truncation for exec tool",
+  register: (api) => {
+    const raw = api.pluginConfig as Record<string, unknown> | undefined;
+    const config: PluginConfig = {
+      enabled: (raw?.enabled as boolean | undefined),
+      gitDiff: raw?.gitDiff as GitDiffConfig | undefined,
+      gitLog: raw?.gitLog as GitLogConfig | undefined,
+      grep: raw?.grep as GrepConfig | undefined,
+      ls: raw?.ls as LsConfig | undefined,
+      build: raw?.build as BuildConfig | undefined,
+    };
+
+    // @ts-ignore — registerHook not in core.d.ts stubs
+    api.registerHook("tool_result_persist", (event: {
+      toolName: string;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      message: any;
+      // isSynthetic: kept for future use — truncation applies to all exec output
+    }) => {
+      const { toolName, message } = event;
+
+      if (toolName !== "exec" && toolName !== "bash") return message;
+      if (config.enabled === false) return message;
+
+      const rawContent = message.content;
+      const content: string =
+        typeof rawContent === "string"
+          ? rawContent
+          : Array.isArray(rawContent)
+            ? rawContent
+                .filter(
+                  (p): p is { type: "text"; text: string } =>
+                    p.type === "text" && typeof p.text === "string",
+                )
+                .map((p) => p.text)
+                .join("\n")
+            : "";
+
+      if (!content || content.length < 200) return message;
+
+      const domain = detectDomain(content);
+      if (!domain) return message;
+
+      const truncated = applyTruncation(content, domain, config);
+      if (truncated === content) return message;
+
+      if (typeof message.content === "string") {
+        message.content = truncated;
+      } else if (Array.isArray(message.content)) {
+        const parts = message.content as Array<{ type: string; text?: string }>;
+        const first = parts.find(
+          (p): p is { type: "text"; text: string } =>
+            p.type === "text" && typeof p.text === "string",
+        );
+        if (first) first.text = truncated;
+      }
+
+      return message;
+    });
+  },
+});
