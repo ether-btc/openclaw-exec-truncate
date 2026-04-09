@@ -92,7 +92,7 @@ function truncateLs(text, max) {
         if (!line.trim() || line.includes("total "))
             continue;
         if (output.length < max) {
-            const match = line.match(/^([dl\-bcs])[rwx\-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+\w+\s+\d+\s+[\d:]+\s+(.+)$/);
+            const match = line.match(/^([dl\-bcs])[rwx\-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+\w+\s+\d+\s+[\d:]+\s+(.+?)$/);
             if (match) {
                 const [, type, size, name] = match;
                 const icon = type === "d" ? "📁" : "📄";
