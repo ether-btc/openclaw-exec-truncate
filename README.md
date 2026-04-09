@@ -224,6 +224,12 @@ README.md                — This file
 
 ## Changelog
 
+- **1.0.2** (pending) — Code quality hardening:
+  - **ReDoS fix:** `\s+` → `[\t ]+` in ls regex — prevents catastrophic backtracking on repeated tabs
+  - **False positives closed:** 6 secret scanning alerts dismissed (test fixtures, not real secrets)
+  - **Bug fixes from code audit:** CR-1, CR-2, W-1–W-4, N-2 resolved; merge conflict C3 deduplication fixed (head/tail cutoff and tail-only collection)
+  - **Tests:** 22 new tests added; MARKER singular/plural singularized
+  - **Cleanup:** node_modules removed (third-party deps)
 - **1.0.1** — README significantly expanded with examples, architecture, configuration, and package contents
 - **1.0.0** — Initial release. 5 domains: gitDiff, gitLog, grep, ls, build.
 
