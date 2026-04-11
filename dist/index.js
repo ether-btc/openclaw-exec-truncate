@@ -273,6 +273,6 @@ export default definePluginEntry({
                 }
             }
             return message;
-        });
+        }, { name: "exec-truncate" });
     },
 });

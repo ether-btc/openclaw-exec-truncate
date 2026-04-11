@@ -1,6 +1,6 @@
 {
   "name": "openclaw-exec-truncate",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Domain-aware output truncation for exec tool — compresses git diff/log, grep, ls, and build output to reduce token consumption",
   "type": "module",
   "main": "dist/index.js",

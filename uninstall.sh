@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+# Check required tools
+command -v jq >/dev/null || { echo "ERROR: jq is required but not installed." >&2; exit 2; }
+
 PLUGIN_ID="exec-truncate"
 
 # Find OpenClaw config (try multiple locations)
@@ -76,7 +79,7 @@ fi
 
 # Remove plugin entry
 echo "🗑️  Removing plugin from openclaw.json..."
-if jq --arg id "$PLUGIN_ID" 'del(.plugins.entries[$id])' "$OPENCLAW_CONFIG" > "${OPENCLAW_CONFIG}.tmp"; then
+if jq --arg id "$PLUGIN_ID" 'del(.plugins.entries[$id]) | del(.plugins.config[$id])' "$OPENCLAW_CONFIG" > "${OPENCLAW_CONFIG}.tmp"; then
   mv "${OPENCLAW_CONFIG}.tmp" "$OPENCLAW_CONFIG"
   echo "✓ Plugin removed from config"
 else
@@ -111,4 +114,4 @@ echo "Next steps:"
 echo "  1. Restart OpenClaw gateway (if running):"
 echo "     openclaw gateway restart"
 echo "  2. Verify plugin is gone:"
-echo "     openclaw plugin list"
+echo "     openclaw plugins list"
