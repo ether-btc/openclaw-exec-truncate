@@ -46,8 +46,8 @@ interface PluginConfig {
 // Truncation helpers
 // ---------------------------------------------------------------------------
 
-const MARKER = (n: number) =>
-  `  ... [${n} ${n === 1 ? "line" : "lines"} truncated by exec-truncate] ...`;
+const MARKER = (n: number, domain?: string) =>
+  `  ... [${domain ? domain + ": " : ""}${n} ${n === 1 ? "line" : "lines"} truncated by exec-truncate] ...`;
 
 // ---------------------------------------------------------------------------
 // Domain-specific truncation
@@ -63,7 +63,7 @@ function truncateGitDiff(text: string, head: number, tail: number): string {
   const kept = additions.slice(0, head);
   const omitted = additions.length - head - tail;
   const tailAdditions = additions.slice(-tail);
-  return [...kept, MARKER(omitted), ...tailAdditions].join("\n");
+  return [...kept, MARKER(omitted, "gitDiff"), ...tailAdditions].join("\n");
 }
 
 /** git log: one line per commit — hash | subject */
@@ -79,6 +79,9 @@ function truncateGitLog(text: string, max: number): string {
       commitLines.find((l) => l.trim().length > 0) ?? "";
     const hashMatch = subject.match(/^([0-9a-f]{7,40})(?:\s+)(.*)/);
     if (!hashMatch) {
+      // Fallback: preserve what we can
+      const fallback = commitLines.find((l) => l.trim().length > 0) ?? "[unparseable commit]";
+      output.push(fallback);
       commitLines = [];
       return;
     }
@@ -99,7 +102,7 @@ function truncateGitLog(text: string, max: number): string {
 
   const kept = output.slice(0, max);
   const omitted = output.length - max;
-  return [...kept, MARKER(omitted)].join("\n");
+  return [...kept, MARKER(omitted, "gitLog")].join("\n");
 }
 
 /** grep: strip absolute paths, keep filename:line:col */
@@ -120,7 +123,7 @@ function truncateGrep(text: string, max: number): string {
   }
 
   const omitted = total - output.length;
-  if (omitted > 0) output.push(MARKER(omitted));
+  if (omitted > 0) output.push(MARKER(omitted, "grep"));
 
   return output.join("\n");
 }
@@ -148,7 +151,7 @@ function truncateLs(text: string, max: number): string {
   }
 
   const total = lines.filter((l) => l.trim() && !l.includes("total ")).length;
-  if (output.length < total) output.push(MARKER(total - output.length));
+  if (output.length < total) output.push(MARKER(total - output.length, "ls"));
 
   return output.join("\n");
 }
@@ -196,9 +199,20 @@ function truncateBuild(text: string, head: number, tail: number): string {
     }
   }
 
-  const kept = headLines.slice(0, head);
   const tailChunk = tailLines.slice(-tail);
-  return [...kept, "", ...tailChunk].join("\n");
+  // Always show tail chunk; backfill from end of cleanLines if tail is sparse
+  if (tailChunk.length < tail && cleanLines.length > 0) {
+    const remaining = tail - tailChunk.length;
+    const fill = cleanLines.slice(-remaining).reverse();
+    for (const line of fill) {
+      const trimmed = line.trim();
+      if (trimmed && !seenTail.has(trimmed) && !seenHead.has(trimmed)) {
+        seenTail.add(trimmed);
+        tailChunk.unshift(trimmed);
+      }
+    }
+  }
+  return [...headLines, "", ...tailChunk].join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +329,7 @@ export default definePluginEntry({
                 .join("\n")
             : "";
 
-      if (!content || content.length < 200) return message;
+      if (!content || content.length < 200 || content.length > 10_000_000) return message;
 
       const domain = detectDomain(content);
       if (!domain) return message;
@@ -323,17 +337,21 @@ export default definePluginEntry({
       const truncated = applyTruncation(content, domain, config);
       if (truncated === content) return message;
 
+      // Return a new message object to avoid mutating the shared event
       if (typeof message.content === "string") {
-        message.content = truncated;
+        return { ...message, content: truncated };
       } else if (Array.isArray(message.content)) {
         const parts = message.content as Array<{ type: string; text?: string }>;
-        const first = parts.find(
+        const firstIdx = parts.findIndex(
           (p): p is { type: "text"; text: string } =>
             p.type === "text" && typeof p.text === "string",
         );
-        if (first) first.text = truncated;
+        if (firstIdx >= 0) {
+          const newParts = [...parts];
+          newParts[firstIdx] = { ...parts[firstIdx], text: truncated };
+          return { ...message, content: newParts };
+        }
       }
-
       return message;
     });
   },

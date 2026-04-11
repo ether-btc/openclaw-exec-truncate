@@ -9,7 +9,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 // ---------------------------------------------------------------------------
 // Truncation helpers
 // ---------------------------------------------------------------------------
-const MARKER = (n) => `  ... [${n} ${n === 1 ? "line" : "lines"} truncated by exec-truncate] ...`;
+const MARKER = (n, domain) => `  ... [${domain ? domain + ": " : ""}${n} ${n === 1 ? "line" : "lines"} truncated by exec-truncate] ...`;
 // ---------------------------------------------------------------------------
 // Domain-specific truncation
 // ---------------------------------------------------------------------------
@@ -25,7 +25,7 @@ function truncateGitDiff(text, head, tail) {
     const kept = additions.slice(0, head);
     const omitted = additions.length - head - tail;
     const tailAdditions = additions.slice(-tail);
-    return [...kept, MARKER(omitted), ...tailAdditions].join("\n");
+    return [...kept, MARKER(omitted, "gitDiff"), ...tailAdditions].join("\n");
 }
 /** git log: one line per commit — hash | subject */
 function truncateGitLog(text, max) {
@@ -39,6 +39,9 @@ function truncateGitLog(text, max) {
         const subject = commitLines.find((l) => l.trim().length > 0) ?? "";
         const hashMatch = subject.match(/^([0-9a-f]{7,40})(?:\s+)(.*)/);
         if (!hashMatch) {
+            // Fallback: preserve what we can
+            const fallback = commitLines.find((l) => l.trim().length > 0) ?? "[unparseable commit]";
+            output.push(fallback);
             commitLines = [];
             return;
         }
@@ -59,7 +62,7 @@ function truncateGitLog(text, max) {
         return output.join("\n");
     const kept = output.slice(0, max);
     const omitted = output.length - max;
-    return [...kept, MARKER(omitted)].join("\n");
+    return [...kept, MARKER(omitted, "gitLog")].join("\n");
 }
 /** grep: strip absolute paths, keep filename:line:col */
 function truncateGrep(text, max) {
@@ -81,7 +84,7 @@ function truncateGrep(text, max) {
     }
     const omitted = total - output.length;
     if (omitted > 0)
-        output.push(MARKER(omitted));
+        output.push(MARKER(omitted, "grep"));
     return output.join("\n");
 }
 /** ls: strip perms/owner/group/time, abbreviate size */
@@ -92,7 +95,7 @@ function truncateLs(text, max) {
         if (!line.trim() || line.includes("total "))
             continue;
         if (output.length < max) {
-            const match = line.match(/^([dl\-bcs])[rwx\-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+\w+\s+\d+\s+[\d:]+\s+(.+?)$/);
+            const match = line.match(/^([dl\-bcs])[rwx\-]{9}[\t ]+\d+[\t ]+\S+[\t ]+\S+[\t ]+(\d+)[\t ]+\w+[\t ]+\d+[\t:]+[\t ]+(.+)$/);
             if (match) {
                 const [, type, size, name] = match;
                 const icon = type === "d" ? "📁" : "📄";
@@ -106,7 +109,7 @@ function truncateLs(text, max) {
     }
     const total = lines.filter((l) => l.trim() && !l.includes("total ")).length;
     if (output.length < total)
-        output.push(MARKER(total - output.length));
+        output.push(MARKER(total - output.length, "ls"));
     return output.join("\n");
 }
 function abbrevSize(bytes) {
@@ -148,9 +151,20 @@ function truncateBuild(text, head, tail) {
             }
         }
     }
-    const kept = headLines.slice(0, head);
     const tailChunk = tailLines.slice(-tail);
-    return [...kept, "", ...tailChunk].join("\n");
+    // Always show tail chunk; backfill from end of cleanLines if tail is sparse
+    if (tailChunk.length < tail && cleanLines.length > 0) {
+        const remaining = tail - tailChunk.length;
+        const fill = cleanLines.slice(-remaining).reverse();
+        for (const line of fill) {
+            const trimmed = line.trim();
+            if (trimmed && !seenTail.has(trimmed) && !seenHead.has(trimmed)) {
+                seenTail.add(trimmed);
+                tailChunk.unshift(trimmed);
+            }
+        }
+    }
+    return [...headLines, "", ...tailChunk].join("\n");
 }
 // ---------------------------------------------------------------------------
 // Apply truncation based on detected domain
@@ -237,7 +251,7 @@ export default definePluginEntry({
                         .map((p) => p.text)
                         .join("\n")
                     : "";
-            if (!content || content.length < 200)
+            if (!content || content.length < 200 || content.length > 10_000_000)
                 return message;
             const domain = detectDomain(content);
             if (!domain)
@@ -245,14 +259,18 @@ export default definePluginEntry({
             const truncated = applyTruncation(content, domain, config);
             if (truncated === content)
                 return message;
+            // Return a new message object to avoid mutating the shared event
             if (typeof message.content === "string") {
-                message.content = truncated;
+                return { ...message, content: truncated };
             }
             else if (Array.isArray(message.content)) {
                 const parts = message.content;
-                const first = parts.find((p) => p.type === "text" && typeof p.text === "string");
-                if (first)
-                    first.text = truncated;
+                const firstIdx = parts.findIndex((p) => p.type === "text" && typeof p.text === "string");
+                if (firstIdx >= 0) {
+                    const newParts = [...parts];
+                    newParts[firstIdx] = { ...parts[firstIdx], text: truncated };
+                    return { ...message, content: newParts };
+                }
             }
             return message;
         });

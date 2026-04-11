@@ -28,7 +28,7 @@ interface PluginConfig {
     ls?: LsConfig;
     build?: BuildConfig;
 }
-declare const MARKER: (n: number) => string;
+declare const MARKER: (n: number, domain?: string) => string;
 /** git diff: head + tail additions, preserve original when everything fits */
 declare function truncateGitDiff(text: string, head: number, tail: number): string;
 /** git log: one line per commit — hash | subject */
