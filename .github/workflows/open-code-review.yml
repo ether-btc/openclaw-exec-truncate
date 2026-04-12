@@ -1,0 +1,25 @@
+name: Open Code Review
+
+on:
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-code-review:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Open Code Review
+        uses: raye-deng/open-code-review@v1
+        with:
+          path: '.'
+          sla: L2 # L1=fast, L2=balanced (recommended start), L3=deep with LLM
+          threshold: 70 # Adjust as needed (fail if score below this)
+          github-token: ${{ secrets.GITHUB_TOKEN }}
