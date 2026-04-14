@@ -237,3 +237,8 @@ README.md                — This file
 
 Built with the [OpenClaw Plugin SDK](https://docs.openclaw.ai/plugins/).
 Published to [ClawHub](https://clawhub.ai) and [GitHub](https://github.com/ether-btc/openclaw-exec-truncate).
+
+---
+
+If this saved you time or made your day a little better, consider sharing a coffee — and keep the ideas flowing.
+[konto.fkey.id](https://konto.fkey.id/)
