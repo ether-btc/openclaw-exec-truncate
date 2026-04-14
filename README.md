@@ -141,9 +141,9 @@ ghi9012 Merge branch 'main'
 
 ```
 # before
-/home/pi/project/src/utils/auth.ts:45:    // TODO: implement token refresh
-/home/pi/project/src/utils/auth.ts:47:    // TODO: add error boundary
-/home/pi/project/src/middleware/role.ts:23:    // TODO: check permissions
+/home/user/project/src/utils/auth.ts:45:    // TODO: implement token refresh
+/home/user/project/src/utils/auth.ts:47:    // TODO: add error boundary
+/home/user/project/src/middleware/role.ts:23:    // TODO: check permissions
 ...
 
 # after
